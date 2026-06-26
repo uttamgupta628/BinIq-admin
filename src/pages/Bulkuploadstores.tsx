@@ -26,6 +26,11 @@ import { AuthService } from "../lib/auth";
 import { API_CONFIG } from "../lib/api";
 import { toast } from "../hooks/use-toast";
 
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const MAX_STORES = 5000;
+const PAGE_SIZE = 10;
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface RawRow {
@@ -53,11 +58,8 @@ interface BulkUploadStoresProps {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const PAGE_SIZE = 10;
-
 /**
  * Normalize a header key: uppercase + collapse whitespace.
- * This makes matching robust against trailing spaces, double spaces, etc.
  */
 function normalizeKey(key: string): string {
   return String(key).toUpperCase().replace(/\s+/g, " ").trim();
@@ -65,7 +67,6 @@ function normalizeKey(key: string): string {
 
 /**
  * Build a lookup map from normalized header → original key.
- * Called once per parsed sheet so every row lookup is O(1).
  */
 function buildHeaderMap(firstRow: Record<string, unknown>): Map<string, string> {
   const map = new Map<string, string>();
@@ -130,15 +131,13 @@ function mapRow(
 ): ParsedRow {
   return {
     id: index,
-    // "STORE NAME" — no known typo variants, but normalize anyway
     store_name: getCell(raw, headerMap, "STORE NAME"),
-    // "STORE ADRESS" is the typo in the source file; also accept correct spelling
     address: getCell(raw, headerMap, "STORE ADRESS", "STORE ADDRESS"),
     store_email: getCell(raw, headerMap, "STORE EMAIL", "EMAIL"),
     city: getCell(raw, headerMap, "CITY"),
     state: getCell(raw, headerMap, "STATE"),
     zip_code: getCell(raw, headerMap, "ZIP CODE", "ZIPCODE", "ZIP")
-      .replace(/\.0$/, ""), // xlsx sometimes turns 10001 → "10001.0"
+      .replace(/\.0$/, ""),
     daily_rate_raw: getCell(raw, headerMap, "DAILY RATE", "DAILY RATES"),
     facebook_link: getCell(raw, headerMap, "FACEBOOK PAGE", "FACEBOOK LINK", "FACEBOOK"),
     status: "pending",
@@ -149,8 +148,8 @@ function mapRow(
 function buildPayload(row: ParsedRow) {
   const daily_rates = parseDailyRates(row.daily_rate_raw) ?? undefined;
   return {
-    store_name: row.store_name.replace(/\s+/g, ' ').trim() || undefined,
-    address: row.address.replace(/\s+/g, ' ').trim() || undefined,
+    store_name: row.store_name.replace(/\s+/g, " ").trim() || undefined,
+    address: row.address.replace(/\s+/g, " ").trim() || undefined,
     store_email: row.store_email || undefined,
     city: row.city || undefined,
     state: row.state || undefined,
@@ -197,8 +196,7 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
         const workbook = XLSX.read(data, { type: "array" });
         const sheet = workbook.Sheets[workbook.SheetNames[0]];
 
-        // Auto-detect the header row: scan up to the first 5 rows to find
-        // whichever one contains "STORE NAME" (handles title/banner rows above headers).
+        // Auto-detect the header row (scan up to first 5 rows)
         const REQUIRED = "STORE NAME";
         let headerRowIndex = -1;
 
@@ -216,7 +214,6 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
         }
 
         if (headerRowIndex === -1) {
-          // Show what row 0 actually had to help with debugging
           const fallback: Record<string, unknown>[] = XLSX.utils.sheet_to_json(sheet, { defval: "", range: 0 });
           const found = fallback.length > 0 ? [...buildHeaderMap(fallback[0]).keys()].join(", ") : "none";
           setParseError(
@@ -235,20 +232,43 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
           return;
         }
 
-        // Build a normalized header map from the detected header row
         const headerMap = buildHeaderMap(json[0]);
 
         const parsed = json
           .map((r, i) => mapRow(r, headerMap, i))
-          .filter((r) => r.store_name !== ""); // skip blank rows
+          .filter((r) => r.store_name !== "");
 
         if (parsed.length === 0) {
           setParseError("No valid store rows found in the file.");
           return;
         }
 
+        // ── Guard: max 5000 stores ──────────────────────────────────────────
+        if (parsed.length > MAX_STORES) {
+          setParseError(
+            `This file contains ${parsed.length.toLocaleString()} stores. Maximum allowed per upload is ${MAX_STORES.toLocaleString()}. Please split the file into smaller batches.`,
+          );
+          return;
+        }
+
+        // ── Guard: duplicate store names ────────────────────────────────────
+        const namesSeen = new Set<string>();
+        const duplicateNames = new Set<string>();
+        for (const row of parsed) {
+          const name = row.store_name.toLowerCase().trim();
+          if (namesSeen.has(name)) duplicateNames.add(row.store_name);
+          else namesSeen.add(name);
+        }
+
+        if (duplicateNames.size > 0) {
+          setParseError(
+            `Duplicate store names found: "${[...duplicateNames].slice(0, 3).join('", "')}${duplicateNames.size > 3 ? `" and ${duplicateNames.size - 3} more` : '"'}. Each store name must be unique.`,
+          );
+          return;
+        }
+
         setRows(parsed);
-      } catch (err) {
+      } catch {
         setParseError("Failed to parse file. Make sure it is a valid spreadsheet.");
       }
     };
@@ -267,14 +287,27 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
   );
 
   // ── Upload ──────────────────────────────────────────────────────────────────
-  // The backend expects ONE request: POST /stores/bulk-create { stores: [...] }
-  // It returns 207 with { created: [{store_name, store_id}], failed: [{store_name, reason}] }
   const handleUpload = async () => {
     if (rows.length === 0 || uploading) return;
+
+    // Belt-and-suspenders guard (parseFile already blocks >5000, but just in case)
+    if (rows.length > MAX_STORES) {
+      toast({
+        title: "Too many stores",
+        description: `Maximum ${MAX_STORES.toLocaleString()} stores per upload. Please split your file into smaller batches.`,
+        variant: "destructive",
+      });
+      return;
+    }
 
     setUploading(true);
     setProgress(0);
     setRows((prev) => prev.map((r) => ({ ...r, status: "uploading", error: undefined })));
+
+    // Animate progress bar while waiting for the single bulk request
+    const progressInterval = setInterval(() => {
+      setProgress((p) => (p < 90 ? p + 1 : p));
+    }, 300);
 
     const baseUrl = API_CONFIG.BASE_URL;
     const bulkPath = API_CONFIG.ENDPOINTS.BULK_CREATE_STORES ?? "/stores/bulk-create";
@@ -286,16 +319,18 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
         body: JSON.stringify({ stores: rows.map(buildPayload) }),
       });
 
-      // Backend returns 207 Multi-Status with created/failed arrays
+      clearInterval(progressInterval);
+
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok && res.status !== 207) {
-        // Whole request failed (auth error, server crash, etc.)
-        setRows((prev) => prev.map((r) => ({
-          ...r,
-          status: "error",
-          error: data?.message ?? `HTTP ${res.status}`,
-        })));
+        setRows((prev) =>
+          prev.map((r) => ({
+            ...r,
+            status: "error",
+            error: data?.message ?? `HTTP ${res.status}`,
+          })),
+        );
         toast({
           title: "Upload failed",
           description: data?.message ?? `Server returned ${res.status}`,
@@ -304,24 +339,26 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
         return;
       }
 
-      // Build lookup sets from backend response
+      // Match backend results by store_name.
+      // Duplicate names are blocked at parse time so this is safe.
       const createdNames = new Set<string>(
-        (data.created ?? []).map((c: any) => c.store_name)
+        (data.created ?? []).map((c: { store_name: string }) => c.store_name),
       );
       const failedMap = new Map<string, string>(
-        (data.failed ?? []).map((f: any) => [f.store_name, f.reason])
+        (data.failed ?? []).map((f: { store_name: string; reason: string }) => [
+          f.store_name,
+          f.reason,
+        ]),
       );
 
-      setRows((prev) => prev.map((r) => {
-        if (createdNames.has(r.store_name)) {
-          return { ...r, status: "success" };
-        }
-        if (failedMap.has(r.store_name)) {
-          return { ...r, status: "error", error: failedMap.get(r.store_name) };
-        }
-        // Fallback — shouldn't happen
-        return { ...r, status: "error", error: "Unknown" };
-      }));
+      setRows((prev) =>
+        prev.map((r) => {
+          if (createdNames.has(r.store_name)) return { ...r, status: "success" };
+          if (failedMap.has(r.store_name))
+            return { ...r, status: "error", error: failedMap.get(r.store_name) };
+          return { ...r, status: "error", error: "No response from server" };
+        }),
+      );
 
       setProgress(100);
 
@@ -330,21 +367,20 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
 
       toast({
         title: "Bulk upload complete",
-        description: `${successCount} stores created, ${errorCount} failed.`,
+        description: `${successCount.toLocaleString()} stores created, ${errorCount} failed.`,
         variant: errorCount > 0 && successCount === 0 ? "destructive" : "default",
       });
 
       if (successCount > 0) onSuccess?.();
-
-    } catch (err: any) {
-      setRows((prev) => prev.map((r) => ({
-        ...r,
-        status: "error",
-        error: err?.message ?? "Network error",
-      })));
+    } catch (err: unknown) {
+      clearInterval(progressInterval);
+      const message = err instanceof Error ? err.message : "Network error";
+      setRows((prev) =>
+        prev.map((r) => ({ ...r, status: "error", error: message })),
+      );
       toast({
         title: "Upload failed",
-        description: err?.message ?? "Network error",
+        description: message,
         variant: "destructive",
       });
     } finally {
@@ -439,31 +475,35 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
               Bulk Upload Stores
             </DialogTitle>
             <DialogDescription>
-              Upload an Excel / CSV file to create multiple stores at once.
-              Stores will be created as <strong>unverified</strong> — store
-              owners can claim and verify them later.
+              Upload an Excel / CSV file to create multiple stores at once. Up to{" "}
+              <strong>{MAX_STORES.toLocaleString()} stores</strong> per upload. Stores will be
+              created as <strong>unverified</strong> — store owners can claim and verify them later.
             </DialogDescription>
           </DialogHeader>
 
           <div className="flex-1 overflow-y-auto space-y-4 pr-1">
             {rows.length === 0 && (
               <div
-                onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setIsDragging(true);
+                }}
                 onDragLeave={() => setIsDragging(false)}
                 onDrop={handleDrop}
                 onClick={() => fileInputRef.current?.click()}
                 className={`
                   border-2 border-dashed rounded-lg p-10 text-center cursor-pointer transition-colors
-                  ${isDragging
-                    ? "border-primary bg-primary/5"
-                    : "border-muted-foreground/30 hover:border-primary/60 hover:bg-muted/30"
+                  ${
+                    isDragging
+                      ? "border-primary bg-primary/5"
+                      : "border-muted-foreground/30 hover:border-primary/60 hover:bg-muted/30"
                   }
                 `}
               >
                 <Upload className="w-10 h-10 mx-auto mb-3 text-muted-foreground" />
                 <p className="font-medium">Drop your file here, or click to browse</p>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Supports .xlsx, .xls, .csv
+                  Supports .xlsx, .xls, .csv &nbsp;·&nbsp; Max {MAX_STORES.toLocaleString()} stores
                 </p>
                 <input
                   ref={fileInputRef}
@@ -489,7 +529,12 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
             {rows.length === 0 && !parseError && (
               <div className="flex items-center justify-between text-sm text-muted-foreground bg-muted/40 rounded-lg px-4 py-3">
                 <span>Not sure about the format?</span>
-                <Button variant="ghost" size="sm" onClick={downloadTemplate} className="gap-1">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={downloadTemplate}
+                  className="gap-1"
+                >
                   <Download className="w-4 h-4" />
                   Download template
                 </Button>
@@ -498,17 +543,19 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
 
             {rows.length > 0 && (
               <div className="flex items-center gap-4 flex-wrap">
-                <span className="text-sm font-medium">{stats.total} stores loaded</span>
+                <span className="text-sm font-medium">
+                  {stats.total.toLocaleString()} stores loaded
+                </span>
                 {stats.success > 0 && (
                   <Badge variant="default" className="bg-green-600">
-                    {stats.success} created
+                    {stats.success.toLocaleString()} created
                   </Badge>
                 )}
                 {stats.error > 0 && (
-                  <Badge variant="destructive">{stats.error} failed</Badge>
+                  <Badge variant="destructive">{stats.error.toLocaleString()} failed</Badge>
                 )}
                 {stats.pending > 0 && uploading && (
-                  <Badge variant="secondary">{stats.pending} pending</Badge>
+                  <Badge variant="secondary">{stats.pending.toLocaleString()} pending</Badge>
                 )}
                 <Button
                   variant="ghost"
@@ -530,7 +577,7 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
             {uploading && (
               <div className="space-y-1">
                 <div className="flex justify-between text-xs text-muted-foreground">
-                  <span>Uploading…</span>
+                  <span>Uploading {stats.total.toLocaleString()} stores…</span>
                   <span>{progress}%</span>
                 </div>
                 <Progress value={progress} className="h-2" />
@@ -543,15 +590,33 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
                   <table className="w-full text-sm">
                     <thead className="bg-muted/50">
                       <tr>
-                        <th className="text-left px-3 py-2 font-medium text-muted-foreground w-8">#</th>
-                        <th className="text-left px-3 py-2 font-medium text-muted-foreground min-w-[160px]">Store Name</th>
-                        <th className="text-left px-3 py-2 font-medium text-muted-foreground min-w-[180px]">Address</th>
-                        <th className="text-left px-3 py-2 font-medium text-muted-foreground">City</th>
-                        <th className="text-left px-3 py-2 font-medium text-muted-foreground">State</th>
-                        <th className="text-left px-3 py-2 font-medium text-muted-foreground">Zip</th>
-                        <th className="text-left px-3 py-2 font-medium text-muted-foreground min-w-[160px]">Email</th>
-                        <th className="text-left px-3 py-2 font-medium text-muted-foreground">Pricing</th>
-                        <th className="text-left px-3 py-2 font-medium text-muted-foreground">Status</th>
+                        <th className="text-left px-3 py-2 font-medium text-muted-foreground w-8">
+                          #
+                        </th>
+                        <th className="text-left px-3 py-2 font-medium text-muted-foreground min-w-[160px]">
+                          Store Name
+                        </th>
+                        <th className="text-left px-3 py-2 font-medium text-muted-foreground min-w-[180px]">
+                          Address
+                        </th>
+                        <th className="text-left px-3 py-2 font-medium text-muted-foreground">
+                          City
+                        </th>
+                        <th className="text-left px-3 py-2 font-medium text-muted-foreground">
+                          State
+                        </th>
+                        <th className="text-left px-3 py-2 font-medium text-muted-foreground">
+                          Zip
+                        </th>
+                        <th className="text-left px-3 py-2 font-medium text-muted-foreground min-w-[160px]">
+                          Email
+                        </th>
+                        <th className="text-left px-3 py-2 font-medium text-muted-foreground">
+                          Pricing
+                        </th>
+                        <th className="text-left px-3 py-2 font-medium text-muted-foreground">
+                          Status
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
@@ -572,18 +637,26 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
                             {page * PAGE_SIZE + idx + 1}
                           </td>
                           <td className="px-3 py-2 font-medium">{row.store_name || "—"}</td>
-                          <td className="px-3 py-2 text-muted-foreground max-w-[200px] truncate" title={row.address}>
+                          <td
+                            className="px-3 py-2 text-muted-foreground max-w-[200px] truncate"
+                            title={row.address}
+                          >
                             {row.address || "—"}
                           </td>
                           <td className="px-3 py-2">{row.city || "—"}</td>
                           <td className="px-3 py-2">{row.state || "—"}</td>
                           <td className="px-3 py-2">{row.zip_code || "—"}</td>
-                          <td className="px-3 py-2 text-muted-foreground max-w-[180px] truncate" title={row.store_email}>
+                          <td
+                            className="px-3 py-2 text-muted-foreground max-w-[180px] truncate"
+                            title={row.store_email}
+                          >
                             {row.store_email || "—"}
                           </td>
                           <td className="px-3 py-2">
                             {row.daily_rate_raw ? (
-                              <Badge variant="outline" className="text-xs">Has rates</Badge>
+                              <Badge variant="outline" className="text-xs">
+                                Has rates
+                              </Badge>
                             ) : (
                               <span className="text-muted-foreground text-xs">—</span>
                             )}
@@ -591,7 +664,9 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
                           <td className="px-3 py-2">
                             <StatusBadge status={row.status} error={row.error} />
                             {row.error && (
-                              <p className="text-xs text-red-600 mt-0.5 max-w-[140px]">{row.error}</p>
+                              <p className="text-xs text-red-600 mt-0.5 max-w-[140px]">
+                                {row.error}
+                              </p>
                             )}
                           </td>
                         </tr>
@@ -603,7 +678,8 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
                 {totalPages > 1 && (
                   <div className="flex items-center justify-between px-4 py-2 border-t bg-muted/30 text-sm">
                     <span className="text-muted-foreground">
-                      Page {page + 1} of {totalPages}
+                      Page {page + 1} of {totalPages} &nbsp;·&nbsp;{" "}
+                      {rows.length.toLocaleString()} total stores
                     </span>
                     <div className="flex gap-1">
                       <Button
@@ -661,7 +737,7 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
               ) : (
                 <>
                   <Upload className="w-4 h-4" />
-                  Upload {rows.length > 0 ? `${rows.length} Stores` : ""}
+                  Upload {rows.length > 0 ? `${rows.length.toLocaleString()} Stores` : ""}
                 </>
               )}
             </Button>
