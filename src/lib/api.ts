@@ -4,11 +4,11 @@
  */
 export const API_CONFIG = {
   BASE_URL: (() => {
-  if (window.location.hostname === "localhost") {
-    return "http://localhost:3001/api";   // local dev
-  }
-  return "http://localhost:3001/api"; // production
-})(),
+    if (window.location.hostname === "localhost") {
+      return "https://biniq-backend.onrender.com/api"; // local dev
+    }
+    return "https://biniq-backend.onrender.com/api"; // production
+  })(),
   ENDPOINTS: {
     // Authentication
     LOGIN: "/users/login",

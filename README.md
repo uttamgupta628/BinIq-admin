@@ -37,6 +37,7 @@ biniq-admin/
 ### Setup
 
 1. **Clone and Install**
+
    ```bash
    git clone <your-repo-url>
    cd biniq-admin
@@ -44,8 +45,9 @@ biniq-admin/
    ```
 
 2. **Configure Environment**
-   
+
    Create `backend/.env`:
+
    ```env
    MONGODB_URI=mongodb+srv://janirudraksh228:YE8BjPlHJwMmI52h@cluster0.lw1uesm.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0
    EMAIL_USER=rudrakshjani948@gmail.com
@@ -57,10 +59,11 @@ biniq-admin/
    ```
 
 3. **Run the Application**
+
    ```bash
    # Run both frontend and backend concurrently
    npm run dev:full
-   
+
    # Or run separately:
    npm run dev:backend  # Backend on port 3001
    npm run dev          # Frontend on port 5173
@@ -68,16 +71,18 @@ biniq-admin/
 
 4. **Access the Application**
    - Frontend: http://localhost:5173
-   - Backend API: http://localhost:3001/api
+   - Backend API: https://biniq-backend.onrender.com/api
 
 ## 🔐 Authentication
 
 ### Admin Login
+
 - **Email**: Create an admin user with role `1` in MongoDB
 - **Password**: Set during user creation
 - **JWT Token**: Stored in localStorage as `biniq_admin_token`
 
 ### User Roles
+
 - `1`: Admin (full access)
 - `2`: Reseller
 - `3`: Store Owner
@@ -85,26 +90,31 @@ biniq-admin/
 ## 📊 Features
 
 ### Dashboard
+
 - Real-time statistics (users, revenue, subscriptions)
 - Recent activity feed
 - Quick metrics overview
 
 ### User Management
+
 - **Store Owners**: Approve/reject, view detailed profiles
 - **Resellers**: Manage accounts and subscription tracking
 - Account deletion and status management
 
 ### Subscription Management
+
 - Payment tracking and statistics
 - Subscription details and history
 - Revenue analytics
 
 ### Content Management
+
 - **FAQ System**: CRUD operations with target audience
 - **Notifications**: Broadcast to specific user groups
 - **Feedback**: Customer support and reply system
 
 ### System Administration
+
 - API key management
 - System settings configuration
 - Admin profile management
@@ -112,11 +122,13 @@ biniq-admin/
 ## 🔧 API Endpoints
 
 ### Authentication
+
 ```
 POST /api/users/login - Admin login
 ```
 
 ### Users
+
 ```
 GET  /api/users/all-details-store-owner - Get all store owners
 GET  /api/users/all-details-resellar - Get all resellers
@@ -126,18 +138,21 @@ DELETE /api/users/delete-account - Delete user account
 ```
 
 ### Feedback
+
 ```
 GET  /api/users/feedback - Get all feedback
 POST /api/users/feedback/reply - Reply to feedback
 ```
 
 ### Subscriptions
+
 ```
 GET /api/subscriptions/all - Get all subscriptions
 GET /api/subscriptions/stats - Get subscription statistics
 ```
 
 ### FAQ
+
 ```
 GET    /api/faqs - Get all FAQs
 POST   /api/faqs - Create FAQ
@@ -146,6 +161,7 @@ DELETE /api/faqs/:id - Delete FAQ
 ```
 
 ### Notifications
+
 ```
 GET    /api/notifications - Get all notifications
 POST   /api/notifications - Create notification
@@ -154,6 +170,7 @@ DELETE /api/notifications/:id - Delete notification
 ```
 
 ### Statistics
+
 ```
 GET /api/stats/paid-users - Paid users statistics
 GET /api/stats/store-owners - Store owners statistics
@@ -166,30 +183,36 @@ GET /api/stats/recent-activity - Recent user activity
 ## 🗄️ Database Models
 
 ### User Model
+
 - Personal information and authentication
 - Role-based access control
 - Subscription tracking
 
 ### Store Model
+
 - Store details and location
 - Social media links
 - Ratings and reviews
 
 ### Subscription Model
+
 - Payment information
 - Feature usage tracking
 - Subscription lifecycle
 
 ### Feedback Model
+
 - Customer feedback and ratings
 - Admin replies and resolution tracking
 
 ### FAQ Model
+
 - Question/answer pairs
 - Target audience specification
 - Version history and analytics
 
 ### Notification Model
+
 - Targeted messaging system
 - Delivery statistics
 - Scheduling capabilities
@@ -207,18 +230,21 @@ GET /api/stats/recent-activity - Recent user activity
 ## 🚀 Deployment
 
 ### Frontend (Vercel/Netlify)
+
 ```bash
 npm run build
 # Deploy dist/ folder
 ```
 
 ### Backend (Vercel/Railway/Heroku)
+
 ```bash
 cd backend
 # Deploy with your preferred platform
 ```
 
 ### Environment Variables for Production
+
 ```env
 VITE_API_URL=https://your-backend-domain.com/api
 MONGODB_URI=your-production-mongodb-uri
@@ -229,6 +255,7 @@ NODE_ENV=production
 ## 🛠️ Development
 
 ### Adding New Features
+
 1. Create/update MongoDB models in `backend/models/`
 2. Add API routes in `backend/routes/`
 3. Create frontend components in `src/components/`
@@ -236,6 +263,7 @@ NODE_ENV=production
 5. Update routing in `src/App.tsx`
 
 ### Code Standards
+
 - TypeScript for type safety
 - ESLint for code quality
 - Prettier for formatting
@@ -256,6 +284,7 @@ This project is licensed under the MIT License.
 ## 🆘 Support
 
 For issues and questions:
+
 - Check the GitHub issues
 - Contact: rudrakshjani948@gmail.com
 
