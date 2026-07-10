@@ -26,12 +26,8 @@ import { AuthService } from "../lib/auth";
 import { API_CONFIG } from "../lib/api";
 import { toast } from "../hooks/use-toast";
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-
 const MAX_STORES = 5000;
 const PAGE_SIZE = 10;
-
-// ─── Types ────────────────────────────────────────────────────────────────────
 
 interface RawRow {
   store_name: string;
@@ -56,18 +52,10 @@ interface BulkUploadStoresProps {
   onSuccess?: () => void;
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-/**
- * Normalize a header key: uppercase + collapse whitespace.
- */
 function normalizeKey(key: string): string {
   return String(key).toUpperCase().replace(/\s+/g, " ").trim();
 }
 
-/**
- * Build a lookup map from normalized header → original key.
- */
 function buildHeaderMap(firstRow: Record<string, unknown>): Map<string, string> {
   const map = new Map<string, string>();
   for (const key of Object.keys(firstRow)) {
@@ -76,10 +64,6 @@ function buildHeaderMap(firstRow: Record<string, unknown>): Map<string, string> 
   return map;
 }
 
-/**
- * Look up a cell value using a normalized header.
- * Accepts multiple aliases so typos in source files are tolerated.
- */
 function getCell(
   row: Record<string, unknown>,
   headerMap: Map<string, string>,
@@ -94,7 +78,6 @@ function getCell(
   return "";
 }
 
-/** Map a raw DAILY RATE string into the daily_rates object expected by the backend */
 function parseDailyRates(raw: string): Record<string, string | null> | null {
   if (!raw || typeof raw !== "string") return null;
 
@@ -123,7 +106,6 @@ function parseDailyRates(raw: string): Record<string, string | null> | null {
   return Object.keys(result).length > 0 ? result : null;
 }
 
-/** Convert raw xlsx row to ParsedRow using a pre-built header map */
 function mapRow(
   raw: Record<string, unknown>,
   headerMap: Map<string, string>,
@@ -136,15 +118,13 @@ function mapRow(
     store_email: getCell(raw, headerMap, "STORE EMAIL", "EMAIL"),
     city: getCell(raw, headerMap, "CITY"),
     state: getCell(raw, headerMap, "STATE"),
-    zip_code: getCell(raw, headerMap, "ZIP CODE", "ZIPCODE", "ZIP")
-      .replace(/\.0$/, ""),
+    zip_code: getCell(raw, headerMap, "ZIP CODE", "ZIPCODE", "ZIP").replace(/\.0$/, ""),
     daily_rate_raw: getCell(raw, headerMap, "DAILY RATE", "DAILY RATES"),
     facebook_link: getCell(raw, headerMap, "FACEBOOK PAGE", "FACEBOOK LINK", "FACEBOOK"),
     status: "pending",
   };
 }
 
-/** Build the API payload for one row */
 function buildPayload(row: ParsedRow) {
   const daily_rates = parseDailyRates(row.daily_rate_raw) ?? undefined;
   return {
@@ -160,8 +140,6 @@ function buildPayload(row: ParsedRow) {
   };
 }
 
-// ─── Component ────────────────────────────────────────────────────────────────
-
 export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
   const [open, setOpen] = useState(false);
   const [rows, setRows] = useState<ParsedRow[]>([]);
@@ -172,7 +150,6 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // ── File parsing ────────────────────────────────────────────────────────────
   const parseFile = useCallback((file: File) => {
     setParseError(null);
     setRows([]);
@@ -196,7 +173,6 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
         const workbook = XLSX.read(data, { type: "array" });
         const sheet = workbook.Sheets[workbook.SheetNames[0]];
 
-        // Auto-detect the header row (scan up to first 5 rows)
         const REQUIRED = "STORE NAME";
         let headerRowIndex = -1;
 
@@ -243,7 +219,6 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
           return;
         }
 
-        // ── Guard: max 5000 stores ──────────────────────────────────────────
         if (parsed.length > MAX_STORES) {
           setParseError(
             `This file contains ${parsed.length.toLocaleString()} stores. Maximum allowed per upload is ${MAX_STORES.toLocaleString()}. Please split the file into smaller batches.`,
@@ -251,7 +226,6 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
           return;
         }
 
-        // ── Guard: duplicate store names ────────────────────────────────────
         const namesSeen = new Set<string>();
         const duplicateNames = new Set<string>();
         for (const row of parsed) {
@@ -275,7 +249,6 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
     reader.readAsArrayBuffer(file);
   }, []);
 
-  // ── Drag & Drop ─────────────────────────────────────────────────────────────
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
@@ -286,11 +259,9 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
     [parseFile],
   );
 
-  // ── Upload ──────────────────────────────────────────────────────────────────
   const handleUpload = async () => {
     if (rows.length === 0 || uploading) return;
 
-    // Belt-and-suspenders guard (parseFile already blocks >5000, but just in case)
     if (rows.length > MAX_STORES) {
       toast({
         title: "Too many stores",
@@ -304,7 +275,6 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
     setProgress(0);
     setRows((prev) => prev.map((r) => ({ ...r, status: "uploading", error: undefined })));
 
-    // Animate progress bar while waiting for the single bulk request
     const progressInterval = setInterval(() => {
       setProgress((p) => (p < 90 ? p + 1 : p));
     }, 300);
@@ -339,8 +309,6 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
         return;
       }
 
-      // Match backend results by store_name.
-      // Duplicate names are blocked at parse time so this is safe.
       const createdNames = new Set<string>(
         (data.created ?? []).map((c: { store_name: string }) => c.store_name),
       );
@@ -367,7 +335,7 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
 
       toast({
         title: "Bulk upload complete",
-        description: `${successCount.toLocaleString()} stores created, ${errorCount} failed.`,
+        description: data.message ?? `${successCount.toLocaleString()} stores created, ${errorCount} failed.`,
         variant: errorCount > 0 && successCount === 0 ? "destructive" : "default",
       });
 
@@ -388,7 +356,6 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
     }
   };
 
-  // ── Download template ────────────────────────────────────────────────────────
   const downloadTemplate = () => {
     const ws = XLSX.utils.aoa_to_sheet([
       ["STORE NAME", "STORE ADRESS", "STORE EMAIL", "CITY", "STATE", "ZIP CODE", "DAILY RATE", "FACEBOOK PAGE"],
@@ -408,7 +375,6 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
     XLSX.writeFile(wb, "bulk_store_template.xlsx");
   };
 
-  // ── Pagination ───────────────────────────────────────────────────────────────
   const totalPages = Math.ceil(rows.length / PAGE_SIZE);
   const pageRows = rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
@@ -421,7 +387,6 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
 
   const canUpload = rows.length > 0 && !uploading;
 
-  // ── Reset on close ───────────────────────────────────────────────────────────
   const handleClose = (v: boolean) => {
     if (uploading) return;
     if (!v) {
@@ -433,7 +398,6 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
     setOpen(v);
   };
 
-  // ── Status badge helper ──────────────────────────────────────────────────────
   const StatusBadge = ({ status, error }: { status: RowStatus; error?: string }) => {
     switch (status) {
       case "pending":
@@ -459,7 +423,6 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
     }
   };
 
-  // ── Render ───────────────────────────────────────────────────────────────────
   return (
     <>
       <Button variant="outline" onClick={() => setOpen(true)}>
@@ -478,6 +441,8 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
               Upload an Excel / CSV file to create multiple stores at once. Up to{" "}
               <strong>{MAX_STORES.toLocaleString()} stores</strong> per upload. Stores will be
               created as <strong>unverified</strong> — store owners can claim and verify them later.
+              Each store's address is automatically located on the map for you (no coordinates
+              needed) — this can make large uploads take a little longer.
             </DialogDescription>
           </DialogHeader>
 
@@ -590,33 +555,15 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
                   <table className="w-full text-sm">
                     <thead className="bg-muted/50">
                       <tr>
-                        <th className="text-left px-3 py-2 font-medium text-muted-foreground w-8">
-                          #
-                        </th>
-                        <th className="text-left px-3 py-2 font-medium text-muted-foreground min-w-[160px]">
-                          Store Name
-                        </th>
-                        <th className="text-left px-3 py-2 font-medium text-muted-foreground min-w-[180px]">
-                          Address
-                        </th>
-                        <th className="text-left px-3 py-2 font-medium text-muted-foreground">
-                          City
-                        </th>
-                        <th className="text-left px-3 py-2 font-medium text-muted-foreground">
-                          State
-                        </th>
-                        <th className="text-left px-3 py-2 font-medium text-muted-foreground">
-                          Zip
-                        </th>
-                        <th className="text-left px-3 py-2 font-medium text-muted-foreground min-w-[160px]">
-                          Email
-                        </th>
-                        <th className="text-left px-3 py-2 font-medium text-muted-foreground">
-                          Pricing
-                        </th>
-                        <th className="text-left px-3 py-2 font-medium text-muted-foreground">
-                          Status
-                        </th>
+                        <th className="text-left px-3 py-2 font-medium text-muted-foreground w-8">#</th>
+                        <th className="text-left px-3 py-2 font-medium text-muted-foreground min-w-[160px]">Store Name</th>
+                        <th className="text-left px-3 py-2 font-medium text-muted-foreground min-w-[180px]">Address</th>
+                        <th className="text-left px-3 py-2 font-medium text-muted-foreground">City</th>
+                        <th className="text-left px-3 py-2 font-medium text-muted-foreground">State</th>
+                        <th className="text-left px-3 py-2 font-medium text-muted-foreground">Zip</th>
+                        <th className="text-left px-3 py-2 font-medium text-muted-foreground min-w-[160px]">Email</th>
+                        <th className="text-left px-3 py-2 font-medium text-muted-foreground">Pricing</th>
+                        <th className="text-left px-3 py-2 font-medium text-muted-foreground">Status</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -633,30 +580,20 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
                               : "bg-muted/20"
                           }`}
                         >
-                          <td className="px-3 py-2 text-muted-foreground">
-                            {page * PAGE_SIZE + idx + 1}
-                          </td>
+                          <td className="px-3 py-2 text-muted-foreground">{page * PAGE_SIZE + idx + 1}</td>
                           <td className="px-3 py-2 font-medium">{row.store_name || "—"}</td>
-                          <td
-                            className="px-3 py-2 text-muted-foreground max-w-[200px] truncate"
-                            title={row.address}
-                          >
+                          <td className="px-3 py-2 text-muted-foreground max-w-[200px] truncate" title={row.address}>
                             {row.address || "—"}
                           </td>
                           <td className="px-3 py-2">{row.city || "—"}</td>
                           <td className="px-3 py-2">{row.state || "—"}</td>
                           <td className="px-3 py-2">{row.zip_code || "—"}</td>
-                          <td
-                            className="px-3 py-2 text-muted-foreground max-w-[180px] truncate"
-                            title={row.store_email}
-                          >
+                          <td className="px-3 py-2 text-muted-foreground max-w-[180px] truncate" title={row.store_email}>
                             {row.store_email || "—"}
                           </td>
                           <td className="px-3 py-2">
                             {row.daily_rate_raw ? (
-                              <Badge variant="outline" className="text-xs">
-                                Has rates
-                              </Badge>
+                              <Badge variant="outline" className="text-xs">Has rates</Badge>
                             ) : (
                               <span className="text-muted-foreground text-xs">—</span>
                             )}
@@ -664,9 +601,7 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
                           <td className="px-3 py-2">
                             <StatusBadge status={row.status} error={row.error} />
                             {row.error && (
-                              <p className="text-xs text-red-600 mt-0.5 max-w-[140px]">
-                                {row.error}
-                              </p>
+                              <p className="text-xs text-red-600 mt-0.5 max-w-[140px]">{row.error}</p>
                             )}
                           </td>
                         </tr>
@@ -678,24 +613,13 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
                 {totalPages > 1 && (
                   <div className="flex items-center justify-between px-4 py-2 border-t bg-muted/30 text-sm">
                     <span className="text-muted-foreground">
-                      Page {page + 1} of {totalPages} &nbsp;·&nbsp;{" "}
-                      {rows.length.toLocaleString()} total stores
+                      Page {page + 1} of {totalPages} &nbsp;·&nbsp; {rows.length.toLocaleString()} total stores
                     </span>
                     <div className="flex gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        disabled={page === 0}
-                        onClick={() => setPage((p) => p - 1)}
-                      >
+                      <Button variant="ghost" size="icon" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>
                         <ChevronLeft className="w-4 h-4" />
                       </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        disabled={page >= totalPages - 1}
-                        onClick={() => setPage((p) => p + 1)}
-                      >
+                      <Button variant="ghost" size="icon" disabled={page >= totalPages - 1} onClick={() => setPage((p) => p + 1)}>
                         <ChevronRight className="w-4 h-4" />
                       </Button>
                     </div>
@@ -706,29 +630,16 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
           </div>
 
           <DialogFooter className="pt-3 border-t flex-wrap gap-2">
-            <Button
-              variant="outline"
-              onClick={downloadTemplate}
-              className="mr-auto gap-1"
-              disabled={uploading}
-            >
+            <Button variant="outline" onClick={downloadTemplate} className="mr-auto gap-1" disabled={uploading}>
               <Download className="w-4 h-4" />
               Template
             </Button>
 
-            <Button
-              variant="outline"
-              onClick={() => handleClose(false)}
-              disabled={uploading}
-            >
+            <Button variant="outline" onClick={() => handleClose(false)} disabled={uploading}>
               {stats.success > 0 ? "Close" : "Cancel"}
             </Button>
 
-            <Button
-              onClick={handleUpload}
-              disabled={!canUpload}
-              className="gap-1 min-w-[140px]"
-            >
+            <Button onClick={handleUpload} disabled={!canUpload} className="gap-1 min-w-[140px]">
               {uploading ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
