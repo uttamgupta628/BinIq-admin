@@ -36,6 +36,9 @@ export const API_CONFIG = {
     // Stores
     CREATE_STORE: "/stores",
     BULK_CREATE_STORES: "/stores/bulk-create",
+    GET_ALL_STORES: "/stores",
+    DELETE_STORE: "/stores/:id",
+    DELETE_ALL_STORES: "/stores/all",
     // Store Claims
     CLAIMS_ALL: "/admin/claims",
     CLAIMS_APPROVE: "/admin/claims/:claim_id/approve",

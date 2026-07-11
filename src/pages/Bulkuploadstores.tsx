@@ -15,6 +15,7 @@ import {
   Upload,
   FileSpreadsheet,
   AlertCircle,
+  AlertTriangle,
   CheckCircle2,
   XCircle,
   ChevronLeft,
@@ -46,6 +47,10 @@ interface ParsedRow extends RawRow {
   id: number;
   status: RowStatus;
   error?: string;
+  // ✅ NEW — set by checkDuplicates() before upload, so the person can see
+  // (and the row can be flagged) which stores already exist server-side,
+  // without having to click Upload first to find out.
+  isDuplicate?: boolean;
 }
 
 interface BulkUploadStoresProps {
@@ -140,6 +145,17 @@ function buildPayload(row: ParsedRow) {
   };
 }
 
+// ─── Duplicate detection ────────────────────────────────────────────────────
+// Same normalization the backend uses (store_name + city + state), so a
+// store flagged here as "already exists" is guaranteed to also be skipped
+// server-side — this is purely an early warning, not a separate rule.
+function normalizeForDedupe(s: string): string {
+  return String(s || "").toLowerCase().trim().replace(/\s+/g, " ");
+}
+function dedupeKey(name: string, city: string, state: string): string {
+  return `${normalizeForDedupe(name)}|${normalizeForDedupe(city)}|${normalizeForDedupe(state)}`;
+}
+
 export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
   const [open, setOpen] = useState(false);
   const [rows, setRows] = useState<ParsedRow[]>([]);
@@ -148,13 +164,71 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
   const [progress, setProgress] = useState(0);
   const [parseError, setParseError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [checkingDuplicates, setCheckingDuplicates] = useState(false);
+  const [duplicateNames, setDuplicateNames] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // ── Pre-upload duplicate check ────────────────────────────────────────────
+  // Fetches existing stores and flags any parsed row that matches one
+  // already in the database (same name + city + state), so the person
+  // sees a warning before they ever click Upload.
+  const checkDuplicates = useCallback(async (parsedRows: ParsedRow[]) => {
+    setCheckingDuplicates(true);
+    try {
+      const baseUrl = API_CONFIG.BASE_URL;
+      const allStoresPath = API_CONFIG.ENDPOINTS.GET_ALL_STORES ?? "/stores";
+      const endpoint = `${baseUrl}${allStoresPath}`;
+
+      const res = await AuthService.makeAuthenticatedRequest(endpoint, { method: "GET" });
+      if (!res.ok) {
+        // Don't block the upload flow if this check itself fails — just
+        // skip the pre-warning; the backend will still reject true
+        // duplicates at upload time.
+        setCheckingDuplicates(false);
+        return;
+      }
+      const data = await res.json().catch(() => ([]));
+      const existingStores: { store_name?: string; city?: string; state?: string }[] = Array.isArray(data)
+        ? data
+        : data?.stores ?? data?.data ?? [];
+
+      const existingKeys = new Set(
+        existingStores.map((s) => dedupeKey(s.store_name ?? "", s.city ?? "", s.state ?? "")),
+      );
+
+      const seenInFile = new Set<string>();
+      const dupes: string[] = [];
+
+      setRows((prev) =>
+        prev.map((row) => {
+          const key = dedupeKey(row.store_name, row.city, row.state);
+          const alreadyExists = existingKeys.has(key);
+          const repeatedInFile = seenInFile.has(key);
+          seenInFile.add(key);
+
+          if (alreadyExists || repeatedInFile) {
+            dupes.push(row.store_name);
+            return { ...row, isDuplicate: true };
+          }
+          return row;
+        }),
+      );
+
+      setDuplicateNames(dupes);
+    } catch {
+      // Silent — this is a best-effort early warning, not a hard requirement.
+    } finally {
+      setCheckingDuplicates(false);
+    }
+  }, []);
+
+  // ── File parsing ────────────────────────────────────────────────────────────
   const parseFile = useCallback((file: File) => {
     setParseError(null);
     setRows([]);
     setPage(0);
     setProgress(0);
+    setDuplicateNames([]);
 
     const allowed = [
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -227,28 +301,31 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
         }
 
         const namesSeen = new Set<string>();
-        const duplicateNames = new Set<string>();
+        const duplicateNamesInFile = new Set<string>();
         for (const row of parsed) {
           const name = row.store_name.toLowerCase().trim();
-          if (namesSeen.has(name)) duplicateNames.add(row.store_name);
+          if (namesSeen.has(name)) duplicateNamesInFile.add(row.store_name);
           else namesSeen.add(name);
         }
 
-        if (duplicateNames.size > 0) {
+        if (duplicateNamesInFile.size > 0) {
           setParseError(
-            `Duplicate store names found: "${[...duplicateNames].slice(0, 3).join('", "')}${duplicateNames.size > 3 ? `" and ${duplicateNames.size - 3} more` : '"'}. Each store name must be unique.`,
+            `Duplicate store names found: "${[...duplicateNamesInFile].slice(0, 3).join('", "')}${duplicateNamesInFile.size > 3 ? `" and ${duplicateNamesInFile.size - 3} more` : '"'}. Each store name must be unique.`,
           );
           return;
         }
 
         setRows(parsed);
+        // Fire the pre-upload duplicate check against the server right away.
+        checkDuplicates(parsed);
       } catch {
         setParseError("Failed to parse file. Make sure it is a valid spreadsheet.");
       }
     };
     reader.readAsArrayBuffer(file);
-  }, []);
+  }, [checkDuplicates]);
 
+  // ── Drag & Drop ─────────────────────────────────────────────────────────────
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
@@ -259,6 +336,7 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
     [parseFile],
   );
 
+  // ── Upload ──────────────────────────────────────────────────────────────────
   const handleUpload = async () => {
     if (rows.length === 0 || uploading) return;
 
@@ -356,6 +434,7 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
     }
   };
 
+  // ── Download template ────────────────────────────────────────────────────────
   const downloadTemplate = () => {
     const ws = XLSX.utils.aoa_to_sheet([
       ["STORE NAME", "STORE ADRESS", "STORE EMAIL", "CITY", "STATE", "ZIP CODE", "DAILY RATE", "FACEBOOK PAGE"],
@@ -375,6 +454,7 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
     XLSX.writeFile(wb, "bulk_store_template.xlsx");
   };
 
+  // ── Pagination ───────────────────────────────────────────────────────────────
   const totalPages = Math.ceil(rows.length / PAGE_SIZE);
   const pageRows = rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
@@ -387,6 +467,7 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
 
   const canUpload = rows.length > 0 && !uploading;
 
+  // ── Reset on close ───────────────────────────────────────────────────────────
   const handleClose = (v: boolean) => {
     if (uploading) return;
     if (!v) {
@@ -394,11 +475,23 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
       setParseError(null);
       setProgress(0);
       setPage(0);
+      setDuplicateNames([]);
     }
     setOpen(v);
   };
 
-  const StatusBadge = ({ status, error }: { status: RowStatus; error?: string }) => {
+  // ── Status badge helper ──────────────────────────────────────────────────────
+  const StatusBadge = ({ status, error, isDuplicate }: { status: RowStatus; error?: string; isDuplicate?: boolean }) => {
+    // A row flagged as a pre-upload duplicate shows that instead of "Pending",
+    // for as long as it's still pending — once upload actually happens the
+    // server's own response (success/error) takes over as usual.
+    if (isDuplicate && status === "pending") {
+      return (
+        <Badge variant="outline" className="gap-1 text-amber-700 border-amber-300 bg-amber-50">
+          <AlertTriangle className="w-3 h-3" /> Already exists
+        </Badge>
+      );
+    }
     switch (status) {
       case "pending":
         return <Badge variant="secondary">Pending</Badge>;
@@ -423,6 +516,7 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
     }
   };
 
+  // ── Render ───────────────────────────────────────────────────────────────────
   return (
     <>
       <Button variant="outline" onClick={() => setOpen(true)}>
@@ -491,6 +585,28 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
               </div>
             )}
 
+            {checkingDuplicates && (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Checking for stores that already exist…
+              </div>
+            )}
+
+            {!checkingDuplicates && duplicateNames.length > 0 && (
+              <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm">
+                <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                <span>
+                  <strong>{duplicateNames.length}</strong> store{duplicateNames.length > 1 ? "s" : ""} in this
+                  file already exist{duplicateNames.length === 1 ? "s" : ""} in the system (same name, city
+                  and state) — {duplicateNames.length > 3
+                    ? `${duplicateNames.slice(0, 3).join(", ")} and ${duplicateNames.length - 3} more`
+                    : duplicateNames.join(", ")}
+                  . They're marked "Already exists" below and will be skipped automatically if you continue —
+                  you can still upload the rest.
+                </span>
+              </div>
+            )}
+
             {rows.length === 0 && !parseError && (
               <div className="flex items-center justify-between text-sm text-muted-foreground bg-muted/40 rounded-lg px-4 py-3">
                 <span>Not sure about the format?</span>
@@ -511,6 +627,11 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
                 <span className="text-sm font-medium">
                   {stats.total.toLocaleString()} stores loaded
                 </span>
+                {duplicateNames.length > 0 && (
+                  <Badge variant="outline" className="text-amber-700 border-amber-300 bg-amber-50">
+                    {duplicateNames.length.toLocaleString()} already exist
+                  </Badge>
+                )}
                 {stats.success > 0 && (
                   <Badge variant="default" className="bg-green-600">
                     {stats.success.toLocaleString()} created
@@ -532,6 +653,7 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
                     setParseError(null);
                     setProgress(0);
                     setPage(0);
+                    setDuplicateNames([]);
                   }}
                 >
                   Clear
@@ -575,6 +697,8 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
                               ? "bg-red-50"
                               : row.status === "success"
                               ? "bg-green-50"
+                              : row.isDuplicate
+                              ? "bg-amber-50"
                               : idx % 2 === 0
                               ? "bg-background"
                               : "bg-muted/20"
@@ -599,7 +723,7 @@ export default function BulkUploadStores({ onSuccess }: BulkUploadStoresProps) {
                             )}
                           </td>
                           <td className="px-3 py-2">
-                            <StatusBadge status={row.status} error={row.error} />
+                            <StatusBadge status={row.status} error={row.error} isDuplicate={row.isDuplicate} />
                             {row.error && (
                               <p className="text-xs text-red-600 mt-0.5 max-w-[140px]">{row.error}</p>
                             )}

@@ -5,7 +5,7 @@ import {
   CardHeader,
   CardTitle,
 } from "../components/ui/card";
-import DataTable, { Column } from "../components/ui/DataTable";
+import DataTable, { type Column } from "../components/ui/DataTable";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -51,20 +51,13 @@ import {
   Clock,
   Phone,
   Mail,
-  Globe,
-  Facebook,
-  Instagram,
-  Twitter,
   Eye,
-  Edit3,
-  Image,
   FileText,
-  TrendingUp,
   RotateCcw,
   Heart,
-  MessageSquare,
   MousePointer,
-  Calendar,
+  Loader2,
+  AlertTriangle,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { AuthService } from "../lib/auth";
@@ -145,6 +138,26 @@ interface StoreOwnersResponse {
   data: StoreOwner[];
 }
 
+// ✅ NEW — raw Store documents (what bulk upload creates). These are
+// separate from StoreOwner/User accounts above — bulk-uploaded stores get
+// user_id: "unassigned" and have no owner account at all, so they never
+// show up in the "Store Owners" table.
+interface StoreRecord {
+  _id: string;
+  store_name: string;
+  address?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip_code?: string | null;
+  user_latitude?: number | null;
+  user_longitude?: number | null;
+  verified?: boolean;
+  views_count?: number;
+  likes?: number;
+  followers?: number;
+  user_id?: string;
+}
+
 export default function StoreOwnersEnhanced() {
   const [storeOwners, setStoreOwners] = useState<StoreOwner[]>([]);
   const [selectedStore, setSelectedStore] = useState<StoreOwner | null>(null);
@@ -165,6 +178,15 @@ export default function StoreOwnersEnhanced() {
     address: "",
     expertise_level: "",
   });
+
+  // ✅ NEW — All Stores state
+  const [allStores, setAllStores] = useState<StoreRecord[]>([]);
+  const [isLoadingStores, setIsLoadingStores] = useState(true);
+  const [storesError, setStoresError] = useState<string | null>(null);
+  const [deleteAllDialogOpen, setDeleteAllDialogOpen] = useState(false);
+  const [deleteAllConfirmText, setDeleteAllConfirmText] = useState("");
+  const [isDeletingAll, setIsDeletingAll] = useState(false);
+  const [deletingStoreId, setDeletingStoreId] = useState<string | null>(null);
 
   const generateMockStoreOwners = (): StoreOwner[] => [
     {
@@ -297,6 +319,7 @@ export default function StoreOwnersEnhanced() {
 
   useEffect(() => {
     fetchStoreOwners();
+    fetchAllStores();
   }, []);
 
   const fetchStoreOwners = async () => {
@@ -321,6 +344,35 @@ export default function StoreOwnersEnhanced() {
       setStoreOwners(generateMockStoreOwners());
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  // ✅ NEW — fetch every raw Store document (includes bulk-uploaded stores
+  // that have no owner account, as well as owner-created ones).
+  const fetchAllStores = async () => {
+    try {
+      setIsLoadingStores(true);
+      setStoresError(null);
+
+      const baseUrl = API_CONFIG.BASE_URL;
+      const allStoresPath = API_CONFIG.ENDPOINTS.GET_ALL_STORES ?? "/stores/all";
+      const response = await AuthService.makeAuthenticatedRequest(
+        `${baseUrl}${allStoresPath}`,
+      );
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const list: StoreRecord[] = Array.isArray(data) ? data : data?.stores ?? data?.data ?? [];
+      setAllStores(list);
+    } catch (err: any) {
+      console.error("Error fetching stores:", err);
+      setStoresError("Failed to load stores.");
+      setAllStores([]);
+    } finally {
+      setIsLoadingStores(false);
     }
   };
 
@@ -410,6 +462,83 @@ export default function StoreOwnersEnhanced() {
         description: `Failed to ${action} store owner.`,
         variant: "destructive",
       });
+    }
+  };
+
+  // ✅ NEW — delete a single store record
+  const handleDeleteStore = async (storeId: string) => {
+    setDeletingStoreId(storeId);
+    try {
+      const baseUrl = API_CONFIG.BASE_URL;
+      const deleteStorePath = API_CONFIG.ENDPOINTS.DELETE_STORE
+        ? API_CONFIG.ENDPOINTS.DELETE_STORE.replace(":id", storeId)
+        : `/stores/${storeId}`;
+
+      const response = await AuthService.makeAuthenticatedRequest(
+        `${baseUrl}${deleteStorePath}`,
+        { method: "DELETE" },
+      );
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.message || "Failed to delete store");
+      }
+
+      setAllStores((prev) => prev.filter((s) => s._id !== storeId));
+      toast({ title: "Success", description: "Store deleted successfully." });
+    } catch (err: any) {
+      console.error("Error deleting store:", err);
+      toast({
+        title: "Error",
+        description: err.message || "Failed to delete store.",
+        variant: "destructive",
+      });
+    } finally {
+      setDeletingStoreId(null);
+    }
+  };
+
+  // ✅ NEW — delete every store at once. Requires the person to type the
+  // exact confirmation phrase (matches the backend's own confirmation
+  // requirement) since this wipes the whole Store collection and can't
+  // be undone.
+  const handleDeleteAllStores = async () => {
+    if (deleteAllConfirmText !== "DELETE ALL STORES") return;
+
+    setIsDeletingAll(true);
+    try {
+      const baseUrl = API_CONFIG.BASE_URL;
+      const allStoresPath = API_CONFIG.ENDPOINTS.DELETE_ALL_STORES ?? "/stores/all";
+
+const response = await AuthService.makeAuthenticatedRequest(
+  `${baseUrl}${allStoresPath}`,
+  {
+    method: "DELETE",
+    body: JSON.stringify({ confirm: "DELETE ALL STORES" }),
+  },
+);
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to delete all stores");
+      }
+
+      setAllStores([]);
+      setDeleteAllDialogOpen(false);
+      setDeleteAllConfirmText("");
+      toast({
+        title: "All stores deleted",
+        description: data.message ?? `Deleted ${data.deletedCount ?? 0} stores.`,
+      });
+    } catch (err: any) {
+      console.error("Error deleting all stores:", err);
+      toast({
+        title: "Error",
+        description: err.message || "Failed to delete all stores.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsDeletingAll(false);
     }
   };
 
@@ -773,6 +902,102 @@ export default function StoreOwnersEnhanced() {
     },
   ];
 
+  // ✅ NEW — columns for the raw "All Stores" table
+  const allStoresColumns: Column<StoreRecord>[] = [
+    {
+      key: "store_name",
+      header: "Store Name",
+      sortable: true,
+      searchable: true,
+      render: (_, store) => (
+        <div>
+          <p className="font-medium">{store.store_name}</p>
+          {!store.user_id || store.user_id === "unassigned" ? (
+            <p className="text-xs text-muted-foreground">No owner (bulk-uploaded)</p>
+          ) : null}
+        </div>
+      ),
+    },
+    {
+      key: "location",
+      header: "Location",
+      searchable: true,
+      render: (_, store) => (
+        <div className="flex items-start gap-1">
+          <MapPin className="w-4 h-4 text-muted-foreground mt-0.5 flex-shrink-0" />
+          <span className="text-sm">
+            {[store.address, store.city, store.state, store.zip_code].filter(Boolean).join(", ") || "—"}
+          </span>
+        </div>
+      ),
+    },
+    {
+      key: "coordinates",
+      header: "On Map",
+      render: (_, store) =>
+        store.user_latitude && store.user_longitude ? (
+          <Badge variant="default" className="bg-green-600">Located</Badge>
+        ) : (
+          <Badge variant="destructive">Not located</Badge>
+        ),
+    },
+    {
+      key: "verified",
+      header: "Verified",
+      render: (_, store) =>
+        store.verified ? (
+          <Badge variant="default">Verified</Badge>
+        ) : (
+          <Badge variant="secondary">Unverified</Badge>
+        ),
+    },
+    {
+      key: "stats",
+      header: "Stats",
+      render: (_, store) => (
+        <span className="text-sm text-muted-foreground">
+          {store.views_count ?? 0} views · {store.likes ?? 0} likes
+        </span>
+      ),
+    },
+    {
+      key: "actions",
+      header: "Actions",
+      render: (_, store) => (
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-red-600"
+              disabled={deletingStoreId === store._id}
+            >
+              {deletingStoreId === store._id ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Trash2 className="w-4 h-4" />
+              )}
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete Store</AlertDialogTitle>
+              <AlertDialogDescription>
+                Are you sure you want to delete "{store.store_name}"? This action cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={() => handleDeleteStore(store._id)}>
+                Delete
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      ),
+    },
+  ];
+
   const stats = {
     total: storeOwners.length,
     approved: storeOwners.filter((so) => so.user.status === "approved").length,
@@ -812,7 +1037,12 @@ export default function StoreOwnersEnhanced() {
               <Store className="w-4 h-4 mr-2" />
               Add Store Owner
             </Button>
-            <BulkUploadStores onSuccess={fetchStoreOwners} />
+            <BulkUploadStores
+              onSuccess={() => {
+                fetchStoreOwners();
+                fetchAllStores();
+              }}
+            />
             <Button variant="outline" onClick={() => handleExport("csv")}>
               Export CSV
             </Button>
@@ -901,6 +1131,112 @@ export default function StoreOwnersEnhanced() {
             />
           </CardContent>
         </Card>
+
+        {/* ✅ NEW — All Stores Table (raw Store documents, including bulk-uploaded ones) */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <CardTitle>All Stores ({allStores.length})</CardTitle>
+              <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" onClick={fetchAllStores} disabled={isLoadingStores}>
+                  {isLoadingStores ? (
+                    <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                  ) : (
+                    <RotateCcw className="w-4 h-4 mr-2" />
+                  )}
+                  Refresh
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => setDeleteAllDialogOpen(true)}
+                  disabled={allStores.length === 0}
+                >
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  Delete All Stores
+                </Button>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {storesError && (
+              <p className="text-orange-600 text-sm mb-4">{storesError}</p>
+            )}
+            {isLoadingStores ? (
+              <div className="flex items-center justify-center py-10 text-muted-foreground">
+                <Loader2 className="w-5 h-5 animate-spin mr-2" />
+                Loading stores...
+              </div>
+            ) : (
+              <DataTable
+                data={allStores}
+                columns={allStoresColumns}
+                searchable={true}
+                sortable={true}
+              />
+            )}
+          </CardContent>
+        </Card>
+
+        {/* ✅ NEW — Delete All Stores confirmation (type-to-confirm, since this
+            is irreversible and has no per-item undo the way single deletes do) */}
+        <Dialog open={deleteAllDialogOpen} onOpenChange={(v) => {
+          if (isDeletingAll) return;
+          setDeleteAllDialogOpen(v);
+          if (!v) setDeleteAllConfirmText("");
+        }}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-red-600">
+                <AlertTriangle className="w-5 h-5" />
+                Delete All Stores
+              </DialogTitle>
+              <DialogDescription>
+                This will permanently delete <strong>all {allStores.length.toLocaleString()} stores</strong> in
+                the database, including bulk-uploaded ones. This cannot be undone.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">
+                Type <code className="bg-muted px-1 rounded">DELETE ALL STORES</code> to confirm
+              </label>
+              <Input
+                value={deleteAllConfirmText}
+                onChange={(e) => setDeleteAllConfirmText(e.target.value)}
+                placeholder="DELETE ALL STORES"
+                disabled={isDeletingAll}
+              />
+            </div>
+
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setDeleteAllDialogOpen(false);
+                  setDeleteAllConfirmText("");
+                }}
+                disabled={isDeletingAll}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={handleDeleteAllStores}
+                disabled={deleteAllConfirmText !== "DELETE ALL STORES" || isDeletingAll}
+              >
+                {isDeletingAll ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Deleting...
+                  </>
+                ) : (
+                  "Delete All Stores"
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* Store Details Dialog */}
         <Dialog open={detailsDialogOpen} onOpenChange={setDetailsDialogOpen}>

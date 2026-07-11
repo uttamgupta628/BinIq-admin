@@ -29,11 +29,17 @@ import {
 import { cn } from "../../lib/utils";
 
 export interface Column<T> {
-  key: keyof T;
+  key: string;
   header: string;
   sortable?: boolean;
   searchable?: boolean;
-  render?: (value: any, row: T) => React.ReactNode;
+  render?: (
+    value: any,
+    row: T,
+    index?: number,
+    allRows?: T[],
+    ...extra: any[]
+  ) => React.ReactNode;
 }
 
 interface DataTableProps<T> {
@@ -42,6 +48,12 @@ interface DataTableProps<T> {
   searchPlaceholder?: string;
   pageSize?: number;
   className?: string;
+  // Accepted for compatibility with existing call sites. Sorting and
+  // searching are actually controlled per-column via `column.sortable`
+  // and `column.searchable`, not at the table level — these two are
+  // currently unused inside DataTable itself.
+  searchable?: boolean;
+  sortable?: boolean;
 }
 
 type SortDirection = "asc" | "desc" | null;
@@ -55,7 +67,7 @@ export default function DataTable<T extends Record<string, any>>({
 }: DataTableProps<T>) {
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
-  const [sortColumn, setSortColumn] = useState<keyof T | null>(null);
+  const [sortColumn, setSortColumn] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<SortDirection>(null);
   const [pageSizeState, setPageSizeState] = useState(pageSize);
 
@@ -93,7 +105,7 @@ export default function DataTable<T extends Record<string, any>>({
   const endIndex = startIndex + pageSizeState;
   const currentData = sortedData.slice(startIndex, endIndex);
 
-  const handleSort = (column: keyof T) => {
+  const handleSort = (column: string) => {
     if (sortColumn === column) {
       if (sortDirection === "asc") {
         setSortDirection("desc");
@@ -109,7 +121,7 @@ export default function DataTable<T extends Record<string, any>>({
     }
   };
 
-  const getSortIcon = (column: keyof T) => {
+  const getSortIcon = (column: string) => {
     if (sortColumn !== column) {
       return <ArrowUpDown className="ml-2 h-4 w-4" />;
     }
@@ -147,7 +159,7 @@ export default function DataTable<T extends Record<string, any>>({
           <TableHeader>
             <TableRow>
               {columns.map((column) => (
-                <TableHead key={String(column.key)}>
+                <TableHead key={column.key}>
                   {column.sortable ? (
                     <Button
                       variant="ghost"
@@ -169,7 +181,7 @@ export default function DataTable<T extends Record<string, any>>({
               currentData.map((row, index) => (
                 <TableRow key={index}>
                   {columns.map((column) => (
-                    <TableCell key={String(column.key)}>
+                    <TableCell key={column.key}>
                       {column.render
                         ? column.render(row[column.key], row)
                         : row[column.key]}
