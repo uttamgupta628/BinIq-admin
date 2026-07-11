@@ -114,7 +114,7 @@ function mapRow(
   return {
     id: index,
     store_name: getCell(raw, headerMap, "STORE NAME"),
-    address: getCell(raw, headerMap, "STORE ADRESS", "STORE ADDRESS"),
+    address: getCell(raw, headerMap, "STORE ADRESS", "STORE ADDRESS", "ADDRESS", "STREET ADDRESS", "ADRESS"),
     store_email: getCell(raw, headerMap, "STORE EMAIL", "EMAIL"),
     city: getCell(raw, headerMap, "CITY"),
     state: getCell(raw, headerMap, "STATE"),
