@@ -5,9 +5,9 @@
 export const API_CONFIG = {
   BASE_URL: (() => {
     if (window.location.hostname === "localhost") {
-      return "https://biniq-backend.onrender.com/api"; // local dev
+      return "https://biniq-backend-nh29.onrender.com/api";
     }
-    return "https://biniq-backend.onrender.com/api"; // production
+    return "https://biniq-backend-nh29.onrender.com/api"; 
   })(),
   ENDPOINTS: {
     // Authentication
